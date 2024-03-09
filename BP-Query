@@ -1,0 +1,120 @@
+WITH DiagnosticAccuracyTable AS (
+    SELECT
+        t.id,
+        SUM(ts.PositiveTestResults) / SUM(ts.TestCapacity) AS DiagnosticAccuracy,
+        CASE 
+            WHEN SUM(ts.PositiveTestResults) = 0 THEN NULL 
+            ELSE GREATEST((SUM(ts.PositiveTestResults) - SUM(ts.TestCapacity)) / SUM(ts.PositiveTestResults), 0) 
+        END AS OvercapacityRate
+    FROM
+        test_samples ts
+    INNER JOIN
+        tests t ON ts.test_id = t.id
+    WHERE
+        ts.TestCapacity > 0 AND ts.name = 'ALL'
+    GROUP BY 
+        t.id
+),
+TestPanelTable AS (
+    SELECT
+        ts.test_id,
+        LISTAGG(CAST(SUBSTRING(q.name, 1, 30) AS VARCHAR(30)), ',') WITHIN GROUP (
+            ORDER BY
+                q.name
+        ) AS TestPanel
+    FROM
+        test_sen ts
+    INNER JOIN quantitity q ON ts.question_id = q.id
+    WHERE
+        q.name NOT IN ('B', 'B4')
+    GROUP BY
+        ts.test_id
+)
+SELECT
+    t.id,
+    CAST(t.TestDate AS DATE) AS TestDate,
+    fo.Diagnosis,
+    c.name AS Country,
+    fd.PercentCapacityUsed,
+    DATEDIFF(minute, t.StartDate, t.EndDate) AS ResultTurnaroundTime,
+    t.AverageGlucoseLevel,
+    t.TotalCholesterolLevel,
+    t.AverageBloodPressure,
+    t.TotalTestCount,
+    CASE WHEN tp.TestPanel IS NULL THEN 'Demo_tests' ELSE 'Non-demo_tests' END AS TestType,
+    t.cloned_test_id,
+    dat.OvercapacityRate,
+    CASE WHEN dat.DiagnosticAccuracy <= 1 THEN dat.DiagnosticAccuracy ELSE 1 END AS DiagnosticAccuracy,
+    t.PatientAge,
+    fs.MedianAge,
+    DIV0(
+        SUM(
+            CASE
+                WHEN ts.class BETWEEN 1 AND 9 THEN 1
+                ELSE 0
+            END
+        ),
+        SUM(
+            CASE
+                WHEN ts.class2 BETWEEN 20 AND 29 THEN 1
+                ELSE 0
+            END
+        ) + SUM(
+            CASE
+                WHEN ts.class = 30 THEN 1
+                ELSE 0
+            END
+        ) + SUM(
+            CASE
+                WHEN ts.class = 10 AND ts.class2 = 31 THEN 1
+                ELSE 0
+            END
+        )
+    ) AS PositiveRate,
+    SUM(
+        CASE
+            WHEN ts.class = 10 AND ts.class2 IN (101, 102, 104) THEN 1
+            ELSE 0
+        END
+    ) AS PositiveTestResults,
+    SUM(
+        CASE
+            WHEN ts.class2 IN (32, 33) THEN 1
+            ELSE 0
+        END
+    ) AS FalsePositives
+FROM
+    medical_records.lab_tests t
+    INNER JOIN medical_records.test_assignments ta ON ta.test_id = t.id
+    INNER JOIN medical_records.lab_accounts la ON la.id = ta.account_id
+    LEFT JOIN medical_records.country c ON t.country_id = c.id
+    LEFT JOIN analysis_reports.test_metrics tm ON t.id = tm.test_id
+    LEFT JOIN medical_records.test_samples ts ON t.id = ts.test_id
+    LEFT JOIN DiagnosticAccuracyTable dat ON t.id = dat.id
+    LEFT JOIN TestPanelTable tp ON t.id = tp.test_id
+    LEFT JOIN analysis_reports.test_outcomes to ON t.id = to.test_id
+WHERE
+    t.study_type_id NOT IN (211, 212)
+    AND t.TestDate BETWEEN '2023-01-01' AND '2023-12-20'
+    AND la.name LIKE 'Lab Services%'
+    AND (tm.Diagnosis = 'B' OR tm.Diagnosis is NULL)
+GROUP BY
+    t.id,
+    CAST(t.TestDate AS DATE),
+    fd.Diagnosis,
+    fd.PercentCapacityUsed,
+    c.name,
+    DATEDIFF(minute, t.FirstCompleteDate, t.LastCompleteDate),
+    t.AverageGlucoseLevel,
+    t.TotalCholesterolLevel,
+    t.AverageBloodPressure,
+    t.TotalTestCount,
+    fs.MedianAge,
+    t.PatientAge,
+    t.cloned_test_id,
+    CASE WHEN dat.DiagnosticAccuracy <= 1 THEN dat.DiagnosticAccuracy ELSE 1 END,
+    dat.OvercapacityRate,
+    CASE WHEN tp.TestPanel IS NULL THEN 'Demo_tests' ELSE 'Non-demo_tests' END,
+    t.project_id
+ORDER BY
+    t.id;
